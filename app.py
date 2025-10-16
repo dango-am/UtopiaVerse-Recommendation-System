@@ -366,68 +366,115 @@ def load_data():
 
 df, model, features = load_data()
 
-# --- Helper Functions ---
+# --- CORRECTED Helper Functions ---
 def get_recommendations(game_name, df_source, model_source, feature_source, platform='Any', top_n=10):
     """Finds a game and returns top_n recommendations, with an optional platform filter."""
-    current_df = df_source
+    try:
+        # Create a working copy of the dataframe to avoid modifying the original
+        current_df = df_source.copy()
 
-    if platform != 'Any':
-        platform_col_name = f'parent_platforms_{platform}'
-        if platform_col_name in current_df.columns:
-            current_df = current_df[current_df[platform_col_name] == 1]
-            if current_df.empty:
-                return f"No games found for the platform '{platform}'.", None
+        # If platform filter is specified, check if the platform exists and filter the dataframe
+        if platform != 'Any':
+            platform_col_name = f'parent_platforms_{platform}'
+            if platform_col_name in current_df.columns:
+                # Create a filtered dataframe for this platform
+                platform_filtered_df = current_df[current_df[platform_col_name] == 1]
+                if platform_filtered_df.empty:
+                    return f"No games found for the platform '{platform}'.", None
+                # Use the filtered dataframe for game matching
+                working_df = platform_filtered_df
+            else:
+                return f"Platform '{platform}' not found.", None
         else:
-            return f"Platform '{platform}' not found.", None
+            # If no platform filter, use the entire dataframe
+            working_df = current_df
 
-    all_game_names = current_df['name'].tolist()
-    closest_matches = difflib.get_close_matches(game_name, all_game_names, n=1, cutoff=0.6)
-    if not closest_matches:
-        return f"No close match found for '{game_name}' on the selected platform. Please try another title.", None
+        # Find the closest matching game name in the working dataframe
+        all_game_names = working_df['name'].tolist()
+        closest_matches = difflib.get_close_matches(game_name, all_game_names, n=1, cutoff=0.6)
+        if not closest_matches:
+            return f"No close match found for '{game_name}' on the selected platform. Please try another title.", None
 
-    matched_game = closest_matches[0]
-    game_idx_list = current_df[current_df['name'] == matched_game].index
-    if game_idx_list.empty:
-        return f"Error finding '{matched_game}' in the dataframe.", None
-    game_idx = game_idx_list[0]
+        matched_game = closest_matches[0]
+        
+        # Get the index of the matched game in the working dataframe
+        game_idx_list = working_df[working_df['name'] == matched_game].index
+        if len(game_idx_list) == 0:
+            return f"Error finding '{matched_game}' in the dataframe.", None
+        game_idx = game_idx_list[0]
 
-    feature_vector = feature_source.loc[game_idx].values.reshape(1, -1)
-    distances, indices = model_source.kneighbors(feature_vector, n_neighbors=top_n + 1)
-    rec_indices = df.iloc[indices[0][1:]].index
+        # Verify that the game index exists in the feature source
+        if game_idx not in feature_source.index:
+            return f"Game index {game_idx} not found in feature matrix.", None
+            
+        # Get the feature vector for the matched game
+        feature_vector = feature_source.loc[game_idx].values.reshape(1, -1)
+        
+        # Calculate the number of neighbors to request (should not exceed available games)
+        n_neighbors_to_request = min(top_n + 1, len(feature_source))
+        
+        # Get recommendations using the model
+        distances, indices = model_source.kneighbors(feature_vector, n_neighbors=n_neighbors_to_request)
+        
+        # Get the recommendation indices (excluding the input game itself)
+        rec_indices_from_model = indices[0][1:]
+        
+        # Convert these indices to the actual dataframe indices
+        # The KNN model returns indices relative to the feature matrix, which should match the original dataframe
+        rec_indices = [idx for idx in rec_indices_from_model if idx < len(df_source)]
+        
+        if not rec_indices:
+            return f"No valid recommendations found for '{matched_game}'.", None
 
-    if platform != 'Any':
-        platform_col_name = f'parent_platforms_{platform}'
-        final_recs_df = df.loc[rec_indices]
-        final_recs_df = final_recs_df[final_recs_df[platform_col_name] == 1].head(top_n)
-    else:
-        final_recs_df = df.iloc[rec_indices]
+        # Get the recommended games from the original dataframe using the indices
+        if platform != 'Any':
+            # For platform-specific recommendations, we need to filter the results
+            # First get all recommendations from the original dataframe
+            all_recommendations_df = df_source.iloc[rec_indices]
+            # Then filter by platform
+            final_recs_df = all_recommendations_df[all_recommendations_df[platform_col_name] == 1].head(top_n)
+        else:
+            # For all platforms, just take the top_n recommendations
+            final_recs_df = df_source.iloc[rec_indices].head(top_n)
 
-    recommendations = final_recs_df.copy()
+        # Check if we have any recommendations left after filtering
+        if final_recs_df.empty:
+            return f"No platform-compatible recommendations found for '{matched_game}' on {platform}.", None
 
-    platform_cols = [c for c in df_source.columns if 'parent_platforms_' in c]
-    genre_cols = [c for c in df_source.columns if 'genres_' in c]
+        # Create a copy of the final recommendations for display
+        recommendations = final_recs_df.copy()
 
-    recommendations['Platforms'] = recommendations[platform_cols].apply(
-        lambda row: ' | '.join([c.replace('parent_platforms_', '') for c in platform_cols if row[c] == 1]),
-        axis=1
-    )
+        # Extract platform and genre columns
+        platform_cols = [col for col in df_source.columns if 'parent_platforms_' in col]
+        genre_cols = [col for col in df_source.columns if 'genres_' in col]
 
-    recommendations['Genres'] = recommendations[genre_cols].apply(
-        lambda row: ' | '.join([c.replace('genres_', '') for c in genre_cols if row[c] == 1]),
-        axis=1
-    )
+        # Create display columns for platforms and genres
+        recommendations['Platforms'] = recommendations[platform_cols].apply(
+            lambda row: ' | '.join([col.replace('parent_platforms_', '') for col in platform_cols if row[col] == 1]),
+            axis=1
+        )
 
-    display_columns = ['name', 'rating', 'Platforms', 'Genres']
-    if 'background_image' in recommendations.columns:
-        display_columns.append('background_image')
-    if 'released' in recommendations.columns:
-        display_columns.append('released')
+        recommendations['Genres'] = recommendations[genre_cols].apply(
+            lambda row: ' | '.join([col.replace('genres_', '') for col in genre_cols if row[col] == 1]),
+            axis=1
+        )
 
-    return matched_game, recommendations[display_columns]
+        # Select which columns to display in the final output
+        display_columns = ['name', 'rating', 'Platforms', 'Genres']
+        if 'background_image' in recommendations.columns:
+            display_columns.append('background_image')
+        if 'released' in recommendations.columns:
+            display_columns.append('released')
+
+        return matched_game, recommendations[display_columns]
+        
+    except Exception as e:
+        # Return a generic error message to avoid exposing internal details
+        return f"An unexpected error occurred while generating recommendations. Please try again with a different game or platform.", None
 
 # --- Streamlit UI ---
 st.markdown('<div class="main-header"> UtopiaVerse </div>', unsafe_allow_html=True)
-st.markdown('<div class="info-text">🌟 Machine Learning That Knows What You’ll Love 🌟</div>', unsafe_allow_html=True)
+st.markdown('<div class="info-text">🌟 Machine Learning That Knows What You\'ll Love 🌟</div>', unsafe_allow_html=True)
 st.markdown('<div class="info-text">Discover, play, and conquer your next gaming masterpiece awaits.</div>', unsafe_allow_html=True)
 
 if df is not None:
