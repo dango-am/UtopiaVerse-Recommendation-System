@@ -7,19 +7,14 @@ import difflib
 @st.cache_data
 def load_artifacts():
     try:
-        # Load the Dataframe
         df = pd.read_pickle("processed_new_df.pkl")
-        
-        # Load the Weighted Matrix (Numbers + Text + Categories)
         feature_matrix = joblib.load("weighted_features.joblib")
-        
-        # Load the Model
         model = joblib.load("knn_model_final.joblib")
-        
+
         return df, feature_matrix, model
+
     except FileNotFoundError as e:
-        # This will show a clear error if your files are missing
-        st.error(f"Could not find file: {e}. Please ensure 'processed_df.pkl', 'weighted_features.joblib', and 'knn_model_final.joblib' are in the same folder as app.py.")
+        st.error(f"Could not find file: {e}")
         return None, None, None
     except Exception as e:
         st.error(f"Error loading files: {e}")
@@ -27,11 +22,10 @@ def load_artifacts():
 
 df, feature_matrix, model = load_artifacts()
 
-# --- Helper Functions ---
+# --- Recommendation Function ---
 def get_recommendations(game_name, df_source, matrix_source, model_source, platform='Any', top_n=10):
-    # 1. Find Game Index (Exact -> Fuzzy)
     matches = df_source[df_source['name'].str.lower() == game_name.lower()]
-    
+
     if not matches.empty:
         game_idx = matches.index[0]
         matched_game = matches.iloc[0]['name']
@@ -43,31 +37,25 @@ def get_recommendations(game_name, df_source, matrix_source, model_source, platf
         matched_game = closest_matches[0]
         game_idx = df_source[df_source['name'] == matched_game].index[0]
 
-    # 2. Get the Feature Vector directly from the sparse matrix
     game_vector = matrix_source[game_idx]
-    
-    # 3. Find Neighbors (Fetch 50 to have enough buffer for platform filtering)
+
     distances, indices = model_source.kneighbors(game_vector, n_neighbors=50)
-    
-    # 4. Filter Results
+
     similar_indices = indices.flatten()
-    similar_indices = similar_indices[similar_indices != game_idx] # Remove self
-    
+    similar_indices = similar_indices[similar_indices != game_idx]
+
     recommendations = df_source.iloc[similar_indices].copy()
 
-    # Apply Platform Filter
     if platform != 'Any':
         platform_col = f'parent_platforms_{platform}'
         if platform_col in df_source.columns:
             recommendations = recommendations[recommendations[platform_col] == 1]
-    
-    # Limit to top N
+
     recommendations = recommendations.head(top_n)
 
     if recommendations.empty:
         return f"No games found like '{matched_game}' on {platform}.", None
 
-    # 5. Format Output
     def get_labels(row, prefix):
         cols = [c for c in df_source.columns if c.startswith(prefix)]
         return ' | '.join([c.replace(prefix, '') for c in cols if row[c] == 1])
@@ -77,45 +65,81 @@ def get_recommendations(game_name, df_source, matrix_source, model_source, platf
 
     return matched_game, recommendations[['name', 'rating', 'Platforms', 'Genres']]
 
-# --- Streamlit UI ---
+# --- UI ---
 st.set_page_config(layout="wide", page_title="Game Recommender")
 st.title("🎮 Advanced Game Recommender")
 
 if df is not None and model is not None:
-    # Sidebar
+
     st.sidebar.header("Configuration")
-    
-    # Platform Selector
+
     platform_cols = [c.replace('parent_platforms_', '') for c in df.columns if 'parent_platforms_' in c]
     platform_cols.sort()
     selected_platform = st.sidebar.selectbox("Filter by Platform (Optional)", ['Any'] + platform_cols)
 
-    # Main Input
     st.write("### Find your next favorite game")
     game_list = sorted(df['name'].unique())
     game_input = st.selectbox("Select a game you like:", game_list)
 
     if st.button("Recommend", type="primary"):
-        with st.spinner(f"Analyzing game mechanics, genres, and descriptions..."):
+
+        with st.spinner("Analyzing gameplay patterns and similarity..."):
             title, recs = get_recommendations(
-                game_input, 
-                df, 
-                feature_matrix, 
-                model, 
+                game_input,
+                df,
+                feature_matrix,
+                model,
                 platform=selected_platform,
                 top_n=10
             )
-        
+
         if recs is None:
             st.error(title)
+
         else:
             st.success(f"Recommendations based on '{title}'")
-            st.dataframe(
-                recs,
-                hide_index=True,
-                column_config={
-                    "rating": st.column_config.NumberColumn(format="%.2f ⭐"),
-                }
-            )
+
+            # --- Selected Game Display ---
+            selected_game = df[df['name'] == title].iloc[0]
+
+            st.markdown("## 🎯 Selected Game")
+
+            col1, col2 = st.columns([1, 2])
+
+            with col1:
+                if pd.notna(selected_game.get('background_image')):
+                    st.image(selected_game['background_image'], use_container_width=True)
+
+            with col2:
+                st.markdown(f"### {selected_game['name']}")
+                if pd.notna(selected_game.get('description')):
+                    st.write(selected_game['description'])
+
+            st.divider()
+
+            # --- Recommendations Display ---
+            st.markdown("## 🔥 Recommended Games")
+
+            for _, row in recs.iterrows():
+
+                rec_full = df[df['name'] == row['name']].iloc[0]
+
+                col1, col2 = st.columns([1, 3])
+
+                with col1:
+                    if pd.notna(rec_full.get('background_image')):
+                        st.image(rec_full['background_image'], use_container_width=True)
+
+                with col2:
+                    st.markdown(f"### {row['name']} ⭐ {row['rating']:.2f}")
+
+                    if pd.notna(rec_full.get('description')):
+                        st.write(rec_full['description'][:500] + "...")
+
+                    st.caption(f"Platforms: {row['Platforms']}")
+                    st.caption(f"Genres: {row['Genres']}")
+
+                st.divider()
+
 else:
-    st.warning("Please upload the 'processed_df.pkl', 'weighted_features.joblib', and 'knn_model_final.joblib' files.")
+    st.warning("Missing required files. Please upload model artifacts.")
