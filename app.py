@@ -5,19 +5,31 @@ import difflib
 import sklearn
 
 # --- Load Artifacts (runs only once using caching) ---
+import streamlit as st
+import pandas as pd
+import joblib
+
 @st.cache_data
 def load_artifacts():
-    """Loads the pre-processed data, scaled features, and trained model."""
     try:
-        df = pd.read_pickle("processed_df.pkl")
+        df = pd.read_pickle("processed_new_df.pkl")
         scaled_features = pd.read_csv("scaled_features.csv")
-        model = joblib.load("knn_model.joblib")
-        return df, scaled_features, model
-    except FileNotFoundError:
-        st.error("Essential files not found. Please run the preparation script in your Jupyter Notebook to generate them.")
+        weighted_features = joblib.load("weighted_features.joblib")
+
+        # Force index alignment
+        df = df.reset_index(drop=True)
+        scaled_features = scaled_features.reset_index(drop=True)
+
+        assert len(df) == len(scaled_features), "Mismatch between df and features!"
+
+        return df, scaled_features, weighted_features
+
+    except FileNotFoundError as e:
+        st.error(f"Missing file: {e}")
         return None, None, None
 
 df, features, model = load_artifacts()
+
 
 # --- Helper Functions ---
 def get_recommendations(game_name, df_source, feature_source, model_source, platform='Any', top_n=10):
