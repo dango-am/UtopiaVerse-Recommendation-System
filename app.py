@@ -10,7 +10,6 @@ def load_artifacts():
         df = pd.read_pickle("processed_new_df.pkl")
         feature_matrix = joblib.load("weighted_features.joblib")
         model = joblib.load("knn_model_final.joblib")
-
         return df, feature_matrix, model
 
     except FileNotFoundError as e:
@@ -19,6 +18,7 @@ def load_artifacts():
     except Exception as e:
         st.error(f"Error loading files: {e}")
         return None, None, None
+
 
 df, feature_matrix, model = load_artifacts()
 
@@ -60,8 +60,12 @@ def get_recommendations(game_name, df_source, matrix_source, model_source, platf
         cols = [c for c in df_source.columns if c.startswith(prefix)]
         return ' | '.join([c.replace(prefix, '') for c in cols if row[c] == 1])
 
-    recommendations['Platforms'] = recommendations.apply(lambda x: get_labels(x, 'parent_platforms_'), axis=1)
-    recommendations['Genres'] = recommendations.apply(lambda x: get_labels(x, 'genres_'), axis=1)
+    recommendations['Platforms'] = recommendations.apply(
+        lambda x: get_labels(x, 'parent_platforms_'), axis=1
+    )
+    recommendations['Genres'] = recommendations.apply(
+        lambda x: get_labels(x, 'genres_'), axis=1
+    )
 
     return matched_game, recommendations[['name', 'rating', 'Platforms', 'Genres']]
 
@@ -73,12 +77,25 @@ if df is not None and model is not None:
 
     st.sidebar.header("Configuration")
 
-    platform_cols = [c.replace('parent_platforms_', '') for c in df.columns if 'parent_platforms_' in c]
-    platform_cols.sort()
-    selected_platform = st.sidebar.selectbox("Filter by Platform (Optional)", ['Any'] + platform_cols)
+    platform_cols = sorted(
+        c.replace('parent_platforms_', '')
+        for c in df.columns if c.startswith('parent_platforms_')
+    )
+
+    selected_platform = st.sidebar.selectbox(
+        "Filter by Platform (Optional)",
+        ['Any'] + platform_cols
+    )
+
+    # --- Platform-aware game list ---
+    if selected_platform == 'Any':
+        game_list = sorted(df['name'].unique())
+    else:
+        platform_col = f'parent_platforms_{selected_platform}'
+        game_list = sorted(df[df[platform_col] == 1]['name'].unique())
 
     st.write("### Find your next favorite game")
-    game_list = sorted(df['name'].unique())
+
     game_input = st.selectbox("Select a game you like:", game_list)
 
     if st.button("Recommend", type="primary"):
@@ -108,12 +125,17 @@ if df is not None and model is not None:
 
             with col1:
                 if pd.notna(selected_game.get('background_image')):
-                    st.image(selected_game['background_image'], use_container_width=True)
+                    st.image(
+                        selected_game['background_image'],
+                        use_container_width=True
+                    )
 
             with col2:
                 st.markdown(f"### {selected_game['name']}")
+
                 if pd.notna(selected_game.get('description')):
-                    st.write(selected_game['description'])
+                    with st.expander("See full description"):
+                        st.write(selected_game['description'])
 
             st.divider()
 
@@ -128,13 +150,18 @@ if df is not None and model is not None:
 
                 with col1:
                     if pd.notna(rec_full.get('background_image')):
-                        st.image(rec_full['background_image'], use_container_width=True)
+                        st.image(
+                            rec_full['background_image'],
+                            use_container_width=True
+                        )
 
                 with col2:
                     st.markdown(f"### {row['name']} ⭐ {row['rating']:.2f}")
 
                     if pd.notna(rec_full.get('description')):
-                        st.write(rec_full['description'][:500] + "...")
+                        st.write(rec_full['description'][:300] + "...")
+                        with st.expander("See more"):
+                            st.write(rec_full['description'])
 
                     st.caption(f"Platforms: {row['Platforms']}")
                     st.caption(f"Genres: {row['Genres']}")
