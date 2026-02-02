@@ -8,7 +8,7 @@ import difflib
 def load_artifacts():
     try:
         # Load the Dataframe
-        df = pd.read_pickle("processed_df.pkl")
+        df = pd.read_pickle("processed_new_df.pkl")
         
         # Load the Weighted Matrix (Numbers + Text + Categories)
         feature_matrix = joblib.load("weighted_features.joblib")
